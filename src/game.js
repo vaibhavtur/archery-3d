@@ -1,0 +1,168 @@
+import * as THREE from 'three';
+
+const TOTAL_ARROWS = 5, STEP = 0.8, TARGET_Z = -16, TARGET_Y = 2.2;
+const RINGS = [ // outer -> inner
+  { score: 0,  color: 0xf4f1e8 },
+  { score: 5,  color: 0x1d1d1d },
+  { score: 10, color: 0x2a6fc9 },
+  { score: 15, color: 0xd6322b },
+  { score: 20, color: 0xf2b705 },
+];
+function ringScore(r) { // r in world units from center
+  if (r <= STEP * 1) return 20;
+  if (r <= STEP * 2) return 15;
+  if (r <= STEP * 3) return 10;
+  if (r <= STEP * 4) return 5;
+  return 0;
+}
+
+function label(text, color) {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d');
+  g.font = 'bold 76px Georgia'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillStyle = color; g.fillText(text, 64, 70);
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.7),
+    new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true }));
+  return m;
+}
+
+function buildArrow() {
+  const a = new THREE.Group();
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 2.2, 8), new THREE.MeshStandardMaterial({ color: 0xc8955a }));
+  shaft.rotation.x = Math.PI / 2; a.add(shaft);
+  const tip = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.3, 8), new THREE.MeshStandardMaterial({ color: 0xb9bfc7, metalness: .8, roughness: .3 }));
+  tip.rotation.x = Math.PI / 2; tip.position.z = 1.25; a.add(tip);
+  for (let i = 0; i < 3; i++) {
+    const f = new THREE.Mesh(new THREE.PlaneGeometry(0.4, 0.22), new THREE.MeshStandardMaterial({ color: 0xd6322b, side: THREE.DoubleSide }));
+    f.rotation.z = (i * Math.PI) / 3; f.rotation.y = Math.PI / 2; f.position.z = -0.95; a.add(f);
+  }
+  return a;
+}
+
+export function startGame(mount, onShot) {
+  const W = () => mount.clientWidth, H = () => mount.clientHeight;
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setSize(W(), H()); renderer.shadowMap.enabled = true;
+  mount.appendChild(renderer.domElement);
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x9ec5e8); scene.fog = new THREE.Fog(0x9ec5e8, 25, 60);
+  const camera = new THREE.PerspectiveCamera(55, W() / H(), 0.1, 100);
+  camera.position.set(0, 2.4, 6); camera.lookAt(0, TARGET_Y, TARGET_Z);
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x4a7a3a, 0.9));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.9); sun.position.set(6, 12, 4); sun.castShadow = true; scene.add(sun);
+
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(120, 120), new THREE.MeshStandardMaterial({ color: 0x4f8a3b }));
+  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
+  // distant hills
+  for (let i = 0; i < 6; i++) {
+    const hill = new THREE.Mesh(new THREE.SphereGeometry(9 + i * 2, 20, 12), new THREE.MeshStandardMaterial({ color: 0x3f7a35 }));
+    hill.position.set(-30 + i * 12, -4, -48); scene.add(hill);
+  }
+
+  // Target
+  const target = new THREE.Group(); target.position.set(0, TARGET_Y, TARGET_Z); scene.add(target);
+  const board = new THREE.Mesh(new THREE.CylinderGeometry(STEP * 5 + 0.15, STEP * 5 + 0.15, 0.3, 48), new THREE.MeshStandardMaterial({ color: 0x8a5a2b }));
+  board.rotation.x = Math.PI / 2; board.position.z = -0.17; target.add(board);
+  RINGS.forEach((r, i) => {
+    const radius = STEP * (5 - i);
+    const disc = new THREE.Mesh(new THREE.CircleGeometry(radius, 64), new THREE.MeshStandardMaterial({ color: r.color, roughness: .9 }));
+    disc.position.z = 0.002 * (i + 1); target.add(disc);
+  });
+  // number labels on each ring (upper side)
+  RINGS.forEach((r, i) => {
+    const mid = STEP * (5 - i) - STEP / 2;
+    const l = label(String(r.score), (i === 1 || i === 2 || i === 3) ? '#ffffff' : '#222222');
+    l.position.set(0, mid, 0.03); target.add(l);
+  });
+  const legMat = new THREE.MeshStandardMaterial({ color: 0x6b4423 });
+  [[-2.2, 1], [2.2, 1]].forEach(([x]) => {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, TARGET_Y + 1, 8), legMat);
+    leg.position.x = x;
+    leg.position.y = (TARGET_Y + 1) / 2 - 1 + 0.0; leg.position.z = TARGET_Z - 0.6; leg.rotation.z = x < 0 ? -0.15 : 0.15; scene.add(leg);
+  });
+
+  // Aim reticle on target plane
+  const reticle = new THREE.Group();
+  const rm = new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true, opacity: .95 });
+  reticle.add(new THREE.Mesh(new THREE.RingGeometry(0.2, 0.25, 32), rm));
+  [[0, .38, .06, .26], [0, -.38, .06, .26], [.38, 0, .26, .06], [-.38, 0, .26, .06]].forEach(([x, y, w, hh]) => {
+    const b = new THREE.Mesh(new THREE.PlaneGeometry(w, hh), rm); b.position.set(x, y, 0); reticle.add(b);
+  });
+  reticle.renderOrder = 10; reticle.children.forEach(c => c.renderOrder = 10);
+  reticle.position.z = TARGET_Z + 0.4; scene.add(reticle);
+
+  // State
+  const mouse = { x: 0, y: 0.15 }; // ndc
+  const ray = new THREE.Raycaster(), plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -TARGET_Z);
+  const aim = new THREE.Vector3(), tmp = new THREE.Vector3();
+  const flying = []; let shots = 0, total = 0, locked = false, raf, t0 = performance.now();
+
+  function updateAim(t) {
+    ray.setFromCamera(new THREE.Vector2(mouse.x, mouse.y), camera);
+    ray.ray.intersectPlane(plane, aim);
+    aim.x += Math.sin(t * 1.7) * 0.28 + Math.sin(t * 3.1) * 0.1;   // hand sway
+    aim.y += Math.cos(t * 1.3) * 0.28 + Math.cos(t * 2.9) * 0.1;
+    reticle.position.x = aim.x; reticle.position.y = aim.y;
+  }
+  function shoot() {
+    if (shots >= TOTAL_ARROWS || locked) return;
+    shots++;
+    const arrow = buildArrow(); scene.add(arrow);
+    const start = new THREE.Vector3(1.2, 1.2, 5);
+    const end = aim.clone(); end.z = TARGET_Z + 0.9;
+    const dist = Math.hypot(end.x - 0, end.y - TARGET_Y);
+    flying.push({ arrow, start, end, t: 0, dur: 0.75, dist, scored: false });
+  }
+  function onPointer(e) {
+    const r = renderer.domElement.getBoundingClientRect();
+    mouse.x = ((e.clientX - r.left) / r.width) * 2 - 1;
+    mouse.y = -((e.clientY - r.top) / r.height) * 2 + 1;
+  }
+  const el = renderer.domElement;
+  const move = e => onPointer(e);
+  const down = e => { onPointer(e); shoot(); };
+  el.addEventListener('pointermove', move); el.addEventListener('pointerdown', down);
+  const onKey = e => { if (e.code === 'Space') { e.preventDefault(); shoot(); } };
+  window.addEventListener('keydown', onKey);
+
+  const prev = new THREE.Vector3();
+  function loop() {
+    raf = requestAnimationFrame(loop);
+    const t = (performance.now() - t0) / 1000;
+    const dt = 1 / 60;
+    updateAim(t);
+    for (let i = flying.length - 1; i >= 0; i--) {
+      const f = flying[i];
+      if (f.t < 1) {
+        f.t = Math.min(1, f.t + dt / f.dur);
+        const k = f.t;
+        f.arrow.position.lerpVectors(f.start, f.end, k);
+        f.arrow.position.y += Math.sin(Math.PI * k) * 0.9 * (1 - k); // gentle arc
+        const k2 = Math.min(1, k + 0.02);
+        tmp.lerpVectors(f.start, f.end, k2); tmp.y += Math.sin(Math.PI * k2) * 0.9 * (1 - k2);
+        f.arrow.lookAt(tmp);
+        if (f.t >= 1 && !f.scored) {
+          f.scored = true;
+          f.arrow.lookAt(f.arrow.position.clone().add(new THREE.Vector3(0, 0, -1)));
+          const pts = f.end.x === undefined ? 0 : ringScore(Math.hypot(f.end.x, f.end.y - TARGET_Y));
+          total += pts;
+          onShot({ pts, total, shots });
+        }
+      }
+    }
+    camera.position.x = mouse.x * 0.6; camera.position.y = 2.4 + mouse.y * 0.3;
+    camera.lookAt(0, TARGET_Y, TARGET_Z);
+    renderer.render(scene, camera);
+  }
+  loop();
+  const onResize = () => { renderer.setSize(W(), H()); camera.aspect = W() / H(); camera.updateProjectionMatrix(); };
+  window.addEventListener('resize', onResize);
+  return () => {
+    cancelAnimationFrame(raf); window.removeEventListener('resize', onResize); window.removeEventListener('keydown', onKey);
+    el.removeEventListener('pointermove', move); el.removeEventListener('pointerdown', down);
+    renderer.dispose(); mount.removeChild(el);
+  };
+}
+
